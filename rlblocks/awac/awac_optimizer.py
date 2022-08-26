@@ -24,40 +24,13 @@ class AWACOptimizer:
     def train_step_actor(self, batch: Batch):
         action = self._actor(batch.state)
 
-        # print(f'--- train_step_actor: state {batch.state.shape}')
-        # print(f'--- train_step_actor: batch action {batch.action.shape}')
-        # print(f'--- train_step_actor: actor action {action.shape}')
-
-        with t.no_grad():
-            action_q_batch = self._q_func(batch.state, batch.action)
-            action_q_actor = self._q_func(batch.state, action)
-            adv = action_q_batch - action_q_actor
-            score = t.where(adv > 0, 1., 0.)
-
-        # print(f'--- train_step_actor: action_q_batch {action_q_batch.shape}')
-        # print(f'--- train_step_actor: action_q_actor {action_q_actor.shape}')
-        # print(f'--- train_step_actor: adv {adv.shape}')
-        # print(f'--- train_step_actor: score {score.shape}')
-
-        action_diff = F.mse_loss(action, batch.action, reduction='none')
-        # print(f'--- train_step_actor: action_diff {action_diff.shape}')
-        scored_action_diff = action_diff * score
-        # print(f'--- train_step_actor: scored_action_diff {scored_action_diff.shape}')
-        actor_loss = scored_action_diff.mean()
-        # print(f'--- train_step_actor: actor_loss {actor_loss.shape}')
+        # add implementation
 
         self._actor_opt.zero_grad()
         actor_loss.backward()
         self._actor_opt.step()
 
         return {
-            'action_q_batch': action_q_batch.mean().item(),
-            'action_q_actor': action_q_actor.mean().item(),
-            'adv': adv.mean().item(),
-            'adv clipped': adv.clamp(min=0).mean().item(),
-            'score': score.mean().item(),
-            'action_diff': action_diff.mean().item(),
-            'scored_action_diff': scored_action_diff.mean().item(),
             'actor_loss': actor_loss.item()
         }
 

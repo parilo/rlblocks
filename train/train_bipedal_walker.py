@@ -11,17 +11,9 @@ import numpy as np
 import mujoco_py
 from gym import ObservationWrapper
 
-from cheetah_env.cheetah_env import CheetahEnv
-from lm_rl.awac.awac_optimizer import AWACOptimizer
-from lm_rl.data.replay_buffer import ReplayBuffer, Episode
-from lm_rl.data_collection.episode import collect_episode
-from lm_rl.data_collection.exploration import NormalExploration, CorrelatedExploration
-from lm_rl.model.actor import Actor
-from lm_rl.model.min_ensamble import MinEnsamble
-from lm_rl.model.mlp import MLP
-from lm_rl.model.q_func import QFunc
-from lm_rl.q_learning.q_optimizer import QOptimizer
-from lm_rl.tb.tb_logger import TensorboardLogger
+from rlblocks.data.replay_buffer import ReplayBuffer
+from rlblocks.model.actor import Actor
+from rlblocks.model.mlp import MLP
 
 
 def parse_args():
@@ -30,7 +22,7 @@ def parse_args():
         '--replay-buffer-ep-num', '--rbep',
         default=100,
         type=int,
-        help='Actor replay buffer capacity in episodes'
+        help='Replay buffer capacity in episodes'
     )
     parser.add_argument(
         '--train-epochs', '--ep',
@@ -48,7 +40,7 @@ def parse_args():
         '--episode-len', '--el',
         default=None,
         type=int,
-        help='Number of train epochs'
+        help='Episode length'
     )
     parser.add_argument(
         '--episodes-per-epoch', '--eps',
@@ -66,7 +58,7 @@ def parse_args():
         '--exploration-prob', '--explp',
         default=0.8,
         type=float,
-        help='Exploration probability',
+        help='Probability of using exploration during episode collection',
     )
     parser.add_argument(
         '--device', '-d',
@@ -83,20 +75,20 @@ def parse_args():
         '--visualize', '--vis',
         default=True,
         type=strtobool,
-        help='Visualize roll outs'
+        help='Visualize episodes'
     )
     parser.add_argument(
         '--visualize-every', '--visev',
         default=1,
         type=int,
-        help='Visualize roll outs'
+        help='Sparse episode visualization'
     )
-    parser.add_argument(
-        '--expl-to-obs', '--eto',
-        default=False,
-        type=strtobool,
-        help='Add exploration to the observation'
-    )
+    # parser.add_argument(
+    #     '--expl-to-obs', '--eto',
+    #     default=False,
+    #     type=strtobool,
+    #     help='Add exploration to the observation'
+    # )
     parser.add_argument(
         '--replay-buffer-pre-fill', '--rbpf',
         default=0,
@@ -126,7 +118,7 @@ def main():
 
     # init env
     env = DictObsWrapper(gym.make('BipedalWalker-v3'))
-    ep_len = 1600
+    ep_len = args.episode_len
     state_len = sum([val.shape[0] for val in env.observation_space.values()])
     action_len = env.action_space.shape[0]
 
