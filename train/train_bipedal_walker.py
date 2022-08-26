@@ -9,15 +9,25 @@ import gym
 import torch as t
 import numpy as np
 import mujoco_py
-from gym import ObservationWrapper
 
+from rlblocks.awac.awac_optimizer import AWACOptimizer
 from rlblocks.data.replay_buffer import ReplayBuffer
 from rlblocks.model.actor import Actor
+from rlblocks.model.min_ensamble import MinEnsamble
 from rlblocks.model.mlp import MLP
+from rlblocks.model.q_func import QFunc
+from rlblocks.q_learning.q_optimizer import QOptimizer
+from rlblocks.utils.env_utils import VecToDictObsWrapper, get_state_shapes
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Perform training')
+    parser = argparse.ArgumentParser(description='Train policy for gym env')
+    parser.add_argument(
+        '--env-name', '--env',
+        required=True,
+        type=str,
+        help='OpenAI Gym env name'
+    )
     parser.add_argument(
         '--replay-buffer-ep-num', '--rbep',
         default=100,
@@ -83,12 +93,6 @@ def parse_args():
         type=int,
         help='Sparse episode visualization'
     )
-    # parser.add_argument(
-    #     '--expl-to-obs', '--eto',
-    #     default=False,
-    #     type=strtobool,
-    #     help='Add exploration to the observation'
-    # )
     parser.add_argument(
         '--replay-buffer-pre-fill', '--rbpf',
         default=0,
@@ -99,47 +103,31 @@ def parse_args():
     return parser.parse_args()
 
 
-class DictObsWrapper(ObservationWrapper):
-
-    def __init__(self, env):
-        super().__init__(env)
-        self.observation_space = {
-            'obs': env.observation_space,
-        }
-
-    def observation(self, observation):
-        return {'obs': observation}
-
-
 def main():
 
     args = parse_args()
     ep_num = args.replay_buffer_ep_num
 
     # init env
-    env = DictObsWrapper(gym.make('BipedalWalker-v3'))
+    env = VecToDictObsWrapper(gym.make(args.env_name))
     ep_len = args.episode_len
     state_len = sum([val.shape[0] for val in env.observation_space.values()])
     action_len = env.action_space.shape[0]
 
-    obs_space = env.observation_space
-    # if args.expl_to_obs:
-    #     obs_space['noise'] = env.action_space
-    #     state_len += action_len
+    state_shapes = get_state_shapes(env.observation_space)
+    print(f'State shapes: {state_shapes}')
 
     # init replay buffer
     replay_buffer = ReplayBuffer(
         ep_num=ep_num,
         ep_len=ep_len,
-        state_space=obs_space,
+        state_shapes=state_shapes,
         action_len=action_len
     )
 
-    # modalities = ['qpos', 'qvel', 'target_vel_lin', 'target_vel_rot_z', 'touch', 'noise']
     modalities = ['obs']
 
     def state_preproc(state: Dict[str, t.Tensor]) -> t.Tensor:
-        # try:
         cated_state = t.cat([
             t.as_tensor(state[mod], dtype=t.float32).to(args.device)
             for mod in modalities
@@ -147,10 +135,6 @@ def main():
         if len(cated_state.shape) == 1:
             cated_state = cated_state.unsqueeze(0)
         return cated_state
-        # except Exception as ex:
-        #     state_shapes = {key: val.shape for key, val in state.items()}
-        #     print(f'--- state_shapes {state_shapes}')
-        #     raise ex
 
     # init models
     actor = Actor(
@@ -160,7 +144,6 @@ def main():
             layers_num=3,
             layer_size=256
         ).to(args.device),
-        # state_preproc=state_preproc,
     )
 
     critic = MinEnsamble([
@@ -295,5 +278,6 @@ def main():
 if __name__ == '__main__':
     main()
 
-
+# 'BipedalWalker-v3' ep len 1600
+# python train/train_bipedal_walker.py --env BipedalWalker-v3 --rbep 1000
 # python lm-rl/train_cheetah.py --rbep 1000 --ep 10000 --st 400 --el 500 --episodes-per-epoch 1 --bs 128 --explp 0.8 --tb ./logs/exp_8 --visev 10
