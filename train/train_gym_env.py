@@ -8,15 +8,17 @@ from typing import Dict, Any
 import gym
 import torch as t
 import numpy as np
-import mujoco_py
 
 from rlblocks.awac.awac_optimizer import AWACOptimizer
-from rlblocks.data.replay_buffer import ReplayBuffer
+from rlblocks.data.replay_buffer import ReplayBuffer, Episode, batch_to_device
+from rlblocks.data_collection.episode import collect_episode
+from rlblocks.data_collection.exploration import NormalExploration
 from rlblocks.model.actor import Actor
 from rlblocks.model.min_ensamble import MinEnsamble
 from rlblocks.model.mlp import MLP
 from rlblocks.model.q_func import QFunc
 from rlblocks.q_learning.q_optimizer import QOptimizer
+from rlblocks.tb.tb_logger import TensorboardLogger
 from rlblocks.utils.env_utils import VecToDictObsWrapper, get_state_shapes
 
 
@@ -48,13 +50,13 @@ def parse_args():
     )
     parser.add_argument(
         '--episode-len', '--el',
-        default=None,
+        default=1000,
         type=int,
         help='Episode length'
     )
     parser.add_argument(
         '--episodes-per-epoch', '--eps',
-        default=None,
+        default=1,
         type=int,
         help='Number of train episodes per epoch'
     )
@@ -110,6 +112,9 @@ def main():
 
     # init env
     env = VecToDictObsWrapper(gym.make(args.env_name))
+    print(f'env {env}')
+    print(f'observation space {env.observation_space}')
+    print(f'action space {env.action_space}')
     ep_len = args.episode_len
     state_len = sum([val.shape[0] for val in env.observation_space.values()])
     action_len = env.action_space.shape[0]
@@ -127,13 +132,11 @@ def main():
 
     modalities = ['obs']
 
-    def state_preproc(state: Dict[str, t.Tensor]) -> t.Tensor:
+    def state_preproc(state: Dict[str, t.Tensor], device: str) -> t.Tensor:
         cated_state = t.cat([
-            t.as_tensor(state[mod], dtype=t.float32).to(args.device)
+            t.as_tensor(state[mod], dtype=t.float32).to(device)
             for mod in modalities
         ], dim=-1)
-        if len(cated_state.shape) == 1:
-            cated_state = cated_state.unsqueeze(0)
         return cated_state
 
     # init models
@@ -166,7 +169,7 @@ def main():
         q_func=q_func,
         q_target_func=q_target_func,
         actor=actor,
-        lr=2e-4,
+        lr=1e-4,
         gamma=0.99,
         update_target_each=1,
         update_target_tau=0.001,
@@ -175,7 +178,7 @@ def main():
     awac_optimizer = AWACOptimizer(
         actor=actor,
         q_func=q_func,
-        lr=2e-4,
+        lr=1e-4,
     )
 
     tb_logger_train = None
@@ -187,9 +190,9 @@ def main():
     global_step_ind = 0
     global_ep_ind = 0
 
-    def episode_postproc(ep: Episode):
-        ep.rewards /= 10
-        return ep
+    # def episode_postproc(ep: Episode):
+    #     ep.rewards /= 10
+    #     return ep
 
     def random_actor(inp: t.Tensor):
         return t.as_tensor(env.action_space.sample())
@@ -211,9 +214,9 @@ def main():
             ep_len=ep_len,
             visualise=False,
             state_preproc=state_preproc,
-            add_noise_to_obs=args.expl_to_obs,
+            device=args.device,
         )
-        episode = episode_postproc(episode)
+        # episode = episode_postproc(episode)
         replay_buffer.push_episode(episode)
         print_ep(episode, f'pre fill {pre_ep_ind}')
 
@@ -225,20 +228,15 @@ def main():
             exploration_enabled = exploration if random.uniform(0, 1) < args.exploration_prob else None
             visualization_enabled = (global_ep_ind % args.visualize_every == 0) and args.visualize
 
-            try:
-                episode = collect_episode(
-                    env=env,
-                    actor=actor,
-                    ep_len=ep_len,
-                    exploration=exploration_enabled,
-                    visualise=visualization_enabled,
-                    state_preproc=state_preproc,
-                    add_noise_to_obs=args.expl_to_obs,
-                )
-            except mujoco_py.builder.MujocoException as ex:
-                print(f'--- mujoco exception {ex}')
-                continue
-            episode = episode_postproc(episode)
+            episode = collect_episode(
+                env=env,
+                actor=actor,
+                ep_len=ep_len,
+                exploration=exploration_enabled,
+                visualise=visualization_enabled,
+                state_preproc=state_preproc,
+            )
+            # episode = episode_postproc(episode)
             print_ep(episode, ep_ind)
             replay_buffer.push_episode(episode)
 
@@ -259,17 +257,18 @@ def main():
         for batch_ind in range(num_train_ops):
 
             batch = replay_buffer.sample_batch(args.batch_size)
-            batch.state = state_preproc(batch.state)
-            batch.next_state = state_preproc(batch.next_state)
+            batch.state = state_preproc(batch.state, args.device)
+            batch.next_state = state_preproc(batch.next_state, args.device)
+            batch = batch_to_device(batch, args.device)
 
             log_data = {}
             log_data.update(q_optimizer.train_step(batch))
-            log_data.update(awac_optimizer.train_step(batch))
+        #     log_data.update(awac_optimizer.train_step(batch))
 
-            # print(f'--- ep {ep_ind} batch {batch_ind}')
+            print(f'--- ep {ep_ind} batch {batch_ind} {log_data}')
 
-            if tb_logger_train is not None:
-                tb_logger_train.log(log_data, global_step_ind)
+        #     if tb_logger_train is not None:
+        #         tb_logger_train.log(log_data, global_step_ind)
 
             global_step_ind += 1
 

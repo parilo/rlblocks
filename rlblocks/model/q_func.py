@@ -1,6 +1,6 @@
 import torch as t
 
-from lm_rl.model.model_wrapper import ModelWrapper
+from rlblocks.model.model_wrapper import ModelWrapper
 
 
 class QFunc(ModelWrapper):

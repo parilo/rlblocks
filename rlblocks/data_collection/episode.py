@@ -4,7 +4,7 @@ import numpy as np
 from gym.envs.mujoco import MujocoEnv
 import torch as t
 
-from lm_rl.data.replay_buffer import Episode
+from rlblocks.data.replay_buffer import Episode
 
 
 def collect_episode(
@@ -13,7 +13,7 @@ def collect_episode(
         ep_len: int,
         exploration: Any = None,
         visualise: bool = False,
-        state_preproc: Optional[Callable[[Any], t.Tensor]] = None,
+        state_preproc: Optional[Callable[[Any, str], t.Tensor]] = None,
         # add_noise_to_obs: bool = False,
         action_min: float = -1,
         action_max: float = 1,
@@ -42,7 +42,7 @@ def collect_episode(
         actor_obs = obs
 
         if state_preproc:
-            actor_obs = state_preproc(actor_obs, device)
+            actor_obs = state_preproc(actor_obs, device).unsqueeze(0)
         action = actor(actor_obs).detach().cpu().numpy().squeeze()
         action += noise
         action = np.clip(action, action_min, action_max)

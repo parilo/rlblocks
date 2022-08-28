@@ -4,9 +4,9 @@ import torch as t
 import torch.optim as optim
 import torch.nn.functional as F
 
-from lm_rl.data.replay_buffer import Batch
-from lm_rl.model.actor import Actor
-from lm_rl.model.q_func import QFunc
+from rlblocks.data.replay_buffer import Batch
+from rlblocks.model.actor import Actor
+from rlblocks.model.q_func import QFunc
 
 
 class AWACOptimizer:
@@ -15,11 +15,13 @@ class AWACOptimizer:
             self,
             actor: Actor,
             q_func: QFunc,
+            alambda: float,
             lr: float
     ):
         self._actor = actor
         self._actor_opt = optim.Adam(self._actor.model.parameters(), lr=lr)
         self._q_func = q_func
+        self._alambda = alambda
 
     def train_step_actor(self, batch: Batch):
         action = self._actor(batch.state)

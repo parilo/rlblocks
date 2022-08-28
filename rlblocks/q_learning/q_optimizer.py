@@ -4,9 +4,9 @@ import torch as t
 import torch.optim as optim
 import torch.nn.functional as F
 
-from lm_rl.data.replay_buffer import Batch
-from lm_rl.model.actor import Actor
-from lm_rl.model.q_func import QFunc
+from rlblocks.data.replay_buffer import Batch
+from rlblocks.model.actor import Actor
+from rlblocks.model.q_func import QFunc
 
 
 def soft_update(local_model, target_model, tau):
