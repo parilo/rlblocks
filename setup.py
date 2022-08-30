@@ -8,6 +8,6 @@ setup(
     description='Simple Reinforcement Learning Library',
     author='Anton Pechenko',
     author_email='',
-    url='',
+    url='https://github.com/parilo/rlblocks',
     packages=['rlblocks'],
 )

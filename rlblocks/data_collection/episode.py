@@ -17,6 +17,7 @@ def collect_episode(
         # add_noise_to_obs: bool = False,
         action_min: float = -1,
         action_max: float = 1,
+        frame_skip: int = 1,
         device: str = 'cpu',
         set_env_start_state: Optional[Callable[[MujocoEnv], None]] = None,
 ) -> Episode:
@@ -42,7 +43,7 @@ def collect_episode(
         actor_obs = obs
 
         if state_preproc:
-            actor_obs = state_preproc(actor_obs, device).unsqueeze(0)
+            actor_obs = state_preproc(actor_obs).to(device).unsqueeze(0)
         action = actor(actor_obs).detach().cpu().numpy().squeeze()
         action += noise
         action = np.clip(action, action_min, action_max)
@@ -50,7 +51,13 @@ def collect_episode(
         # if exploration is not None:
         #     action = exploration(action)
 
-        obs, reward, done, info = env.step(action)
+        reward = 0
+        for _ in range(frame_skip):
+            obs, reward_substep, done, info = env.step(action)
+            reward += reward_substep
+            if done:
+                break
+
         obs_list.append(obs)
         actions_list.append(action)
         reward_list.append([reward])

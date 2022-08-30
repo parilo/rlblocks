@@ -14,9 +14,11 @@ from rlblocks.data.replay_buffer import ReplayBuffer, Episode, batch_to_device
 from rlblocks.data_collection.episode import collect_episode
 from rlblocks.data_collection.exploration import NormalExploration
 from rlblocks.model.actor import Actor
+from rlblocks.model.gaussian_actor import GaussianActor
 from rlblocks.model.min_ensamble import MinEnsamble
 from rlblocks.model.mlp import MLP
 from rlblocks.model.q_func import QFunc
+from rlblocks.model.stochastic_actor import DeterministicActorWrapper
 from rlblocks.q_learning.q_optimizer import QOptimizer
 from rlblocks.tb.tb_logger import TensorboardLogger
 from rlblocks.utils.env_utils import VecToDictObsWrapper, get_state_shapes
@@ -132,21 +134,24 @@ def main():
 
     modalities = ['obs']
 
-    def state_preproc(state: Dict[str, t.Tensor], device: str) -> t.Tensor:
+    def state_preproc(state: Dict[str, t.Tensor]) -> t.Tensor:
         cated_state = t.cat([
-            t.as_tensor(state[mod], dtype=t.float32).to(device)
+            t.as_tensor(state[mod], dtype=t.float32)
             for mod in modalities
         ], dim=-1)
         return cated_state
 
     # init models
-    actor = Actor(
+    actor = GaussianActor(
         model=MLP(
             input_size=state_len,
-            output_size=action_len,
+            output_size=2 * action_len,
             layers_num=3,
             layer_size=256
         ).to(args.device),
+        action_min=-1,
+        action_max=1,
+        logstd_range=(-2, 5),
     )
 
     critic = MinEnsamble([
@@ -168,16 +173,17 @@ def main():
     q_optimizer = QOptimizer(
         q_func=q_func,
         q_target_func=q_target_func,
-        actor=actor,
+        actor=DeterministicActorWrapper(actor),
         lr=1e-4,
-        gamma=0.99,
+        gamma=0.98,
         update_target_each=1,
-        update_target_tau=0.001,
+        update_target_tau=0.002,
     )
 
     awac_optimizer = AWACOptimizer(
         actor=actor,
         q_func=q_func,
+        alambda=1,
         lr=1e-4,
     )
 
@@ -190,9 +196,9 @@ def main():
     global_step_ind = 0
     global_ep_ind = 0
 
-    # def episode_postproc(ep: Episode):
-    #     ep.rewards /= 10
-    #     return ep
+    def episode_postproc(ep: Episode):
+        ep.rewards /= 10
+        return ep
 
     def random_actor(inp: t.Tensor):
         return t.as_tensor(env.action_space.sample())
@@ -215,8 +221,9 @@ def main():
             visualise=False,
             state_preproc=state_preproc,
             device=args.device,
+            frame_skip=2,
         )
-        # episode = episode_postproc(episode)
+        episode = episode_postproc(episode)
         replay_buffer.push_episode(episode)
         print_ep(episode, f'pre fill {pre_ep_ind}')
 
@@ -235,8 +242,10 @@ def main():
                 exploration=exploration_enabled,
                 visualise=visualization_enabled,
                 state_preproc=state_preproc,
+                device=args.device,
+                frame_skip=2,
             )
-            # episode = episode_postproc(episode)
+            episode = episode_postproc(episode)
             print_ep(episode, ep_ind)
             replay_buffer.push_episode(episode)
 
@@ -257,18 +266,19 @@ def main():
         for batch_ind in range(num_train_ops):
 
             batch = replay_buffer.sample_batch(args.batch_size)
-            batch.state = state_preproc(batch.state, args.device)
-            batch.next_state = state_preproc(batch.next_state, args.device)
+            batch.state = state_preproc(batch.state)#, args.device)
+            batch.next_state = state_preproc(batch.next_state)#, args.device)
             batch = batch_to_device(batch, args.device)
 
             log_data = {}
             log_data.update(q_optimizer.train_step(batch))
-        #     log_data.update(awac_optimizer.train_step(batch))
+            log_data.update(awac_optimizer.train_step(batch))
 
-            print(f'--- ep {ep_ind} batch {batch_ind} {log_data}')
+            # if batch_ind == 0:
+            #     print(f'--- ep {ep_ind} batch {batch_ind} {log_data}')
 
-        #     if tb_logger_train is not None:
-        #         tb_logger_train.log(log_data, global_step_ind)
+            if tb_logger_train is not None:
+                tb_logger_train.log(log_data, global_step_ind)
 
             global_step_ind += 1
 
@@ -276,7 +286,3 @@ def main():
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     main()
-
-# 'BipedalWalker-v3' ep len 1600
-# python train/train_bipedal_walker.py --env BipedalWalker-v3 --rbep 1000
-# python lm-rl/train_cheetah.py --rbep 1000 --ep 10000 --st 400 --el 500 --episodes-per-epoch 1 --bs 128 --explp 0.8 --tb ./logs/exp_8 --visev 10
