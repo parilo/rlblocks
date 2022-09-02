@@ -13,6 +13,7 @@ class Episode:
     actions: t.Tensor
     rewards: t.Tensor
     size: int
+    done: bool
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Batch:
     state: Union[t.Tensor, Dict[str, t.Tensor]]
     action: t.Tensor
     reward: Optional[t.Tensor]
+    done: t.Tensor
     next_state: Optional[Union[t.Tensor, Dict[str, t.Tensor]]] = None
     info: Optional[Dict[str, t.Tensor]] = None
 
@@ -29,6 +31,7 @@ def batch_to_device(batch: Batch, device: t.device):
         state=batch.state.to(device),
         action=batch.action.to(device) if batch.action is not None else None,
         reward=batch.reward.to(device) if batch.reward is not None else None,
+        done=batch.done.to(device),
         next_state=batch.next_state.to(device) if batch.next_state is not None else None,
         info={
             key: value.to(device) for key, value in batch.info.items()
@@ -66,6 +69,7 @@ class ReplayBuffer:
         self._actions = t.zeros((self._ep_num, self._ep_len, self._action_len), dtype=t.float32)
         self._rewards = t.zeros((self._ep_num, self._ep_len, 1), dtype=t.float32)
         self._ep_sizes = t.zeros((self._ep_num, 1), dtype=t.int32)
+        self._ends_with_done = t.zeros((self._ep_num, 1), dtype=t.int32)
         self._ep_ind = 0
         self._ep_stored = 0
         self._ep_pushed = 0
@@ -85,6 +89,7 @@ class ReplayBuffer:
         self._actions[self._ep_ind, :episode.size] = episode.actions
         self._rewards[self._ep_ind, :episode.size] = episode.rewards
         self._ep_sizes[self._ep_ind][0] = episode.size
+        self._ends_with_done[self._ep_ind][0] = episode.done
 
         if self._save_dir:
             self._save_episode(episode, self._ep_ind)
@@ -103,7 +108,8 @@ class ReplayBuffer:
     def sample_batch(self, batch_size) -> Batch:
         ep_inds = np.random.randint(0, self._ep_stored, size=batch_size)
         transition_inds = np.random.randint(0, self._ep_len, size=batch_size)
-        transition_inds = np.mod(transition_inds, self._ep_sizes[ep_inds, 0])
+        ep_sizes = self._ep_sizes[ep_inds, 0]
+        transition_inds = np.mod(transition_inds, ep_sizes)  # ep size is number of taken actions
         state = {mod_name: mod_value[ep_inds, transition_inds] for mod_name, mod_value in self._states.items()}
         next_state = {mod_name: mod_value[ep_inds, transition_inds + 1] for mod_name, mod_value in self._states.items()}
         return Batch(
@@ -111,6 +117,7 @@ class ReplayBuffer:
             action=self._actions[ep_inds, transition_inds],
             reward=self._rewards[ep_inds, transition_inds],
             next_state=next_state,
+            done=t.as_tensor(transition_inds == ep_sizes - 1, dtype=t.float32).unsqueeze(-1) * self._ends_with_done[ep_inds],
         )
 
     def sample_seq_batch(self, batch_size, seq_len) -> Batch:

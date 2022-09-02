@@ -57,7 +57,7 @@ class QOptimizer:
         with t.no_grad():
             next_action = self._actor(batch.next_state)
             q_value_target = self._q_target_func(batch.next_state, next_action)
-            q_target = batch.reward + self._gamma * q_value_target
+            q_target = batch.reward + (1 - batch.done) * self._gamma * q_value_target
 
         # print(f'--- train_step q: state {batch.state.shape}')
         # print(f'--- train_step q: next state {batch.next_state.shape}')

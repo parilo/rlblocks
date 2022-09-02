@@ -44,7 +44,7 @@ def collect_episode(
 
         if state_preproc:
             actor_obs = state_preproc(actor_obs).to(device).unsqueeze(0)
-        action = actor(actor_obs).detach().cpu().numpy().squeeze()
+        action = actor(actor_obs).detach().cpu().numpy().squeeze(0)
         action += noise
         action = np.clip(action, action_min, action_max)
 
@@ -84,5 +84,6 @@ def collect_episode(
         states=states,
         actions=t.as_tensor(np.array(actions_list), dtype=t.float32),
         rewards=t.as_tensor(np.array(reward_list), dtype=t.float32),
-        size=len(actions_list)
+        size=len(actions_list),
+        done=done,
     )

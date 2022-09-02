@@ -149,8 +149,8 @@ def main():
             layers_num=3,
             layer_size=256
         ).to(args.device),
-        action_min=-1,
-        action_max=1,
+        action_min=t.as_tensor(env.action_space.low).to(args.device),
+        action_max=t.as_tensor(env.action_space.high).to(args.device),
         logstd_range=(-2, 5),
     )
 
@@ -177,13 +177,13 @@ def main():
         lr=1e-4,
         gamma=0.98,
         update_target_each=1,
-        update_target_tau=0.002,
+        update_target_tau=0.005,
     )
 
     awac_optimizer = AWACOptimizer(
         actor=actor,
         q_func=q_func,
-        alambda=1,
+        alambda=0.5,
         lr=1e-4,
     )
 
@@ -197,11 +197,11 @@ def main():
     global_ep_ind = 0
 
     def episode_postproc(ep: Episode):
-        ep.rewards /= 10
+        # ep.rewards /= 10
         return ep
 
     def random_actor(inp: t.Tensor):
-        return t.as_tensor(env.action_space.sample())
+        return t.as_tensor([env.action_space.sample()])
 
     def print_ep(episode: Episode, ep_ind):
         ep_reward = t.sum(episode.rewards).item()
@@ -221,7 +221,9 @@ def main():
             visualise=False,
             state_preproc=state_preproc,
             device=args.device,
-            frame_skip=2,
+            action_min=env.action_space.low,
+            action_max=env.action_space.high,
+            # frame_skip=2,
         )
         episode = episode_postproc(episode)
         replay_buffer.push_episode(episode)
@@ -243,7 +245,9 @@ def main():
                 visualise=visualization_enabled,
                 state_preproc=state_preproc,
                 device=args.device,
-                frame_skip=2,
+                action_min=env.action_space.low,
+                action_max=env.action_space.high,
+                # frame_skip=2,
             )
             episode = episode_postproc(episode)
             print_ep(episode, ep_ind)

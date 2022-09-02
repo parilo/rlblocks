@@ -25,18 +25,17 @@ class AWACOptimizer:
         self._alambda = alambda
 
     def train_step(self, batch: Batch) -> Dict[str, float]:
-        action = self._actor(batch.state)
-
         # print(f'--- train_step_actor: state {batch.state.shape}')
         # print(f'--- train_step_actor: batch action {batch.action.shape}')
         # print(f'--- train_step_actor: actor action {action.shape}')
 
         with t.no_grad():
             action_q_batch = self._q_func(batch.state, batch.action)
-            action_q_actor = self._q_func(batch.state, action)
+            action_policy, info = self._actor(batch.state, add_info=True)
+            action_q_actor = self._q_func(batch.state, action_policy)
             adv = action_q_batch - action_q_actor
-            adv = adv.clamp(-5, 5)
-            # score = t.where(adv > 0, 1., 0.)
+            adv_clipped = adv.clamp(min=0)
+            adv = adv.clamp(max=5)
             score = t.exp(adv / self._alambda)
             score_clipped = t.where(adv > 0, score, 0.)
 
@@ -45,11 +44,11 @@ class AWACOptimizer:
         # print(f'--- train_step_actor: adv {adv.shape}')
         # print(f'--- train_step_actor: score {score.shape}')
 
-        log_prob = -self._actor.log_prob(batch.state, action_q_batch)
+        log_prob = self._actor.log_prob(batch.state, batch.action)
         # print(f'--- train_step_actor: log_prob {log_prob.shape}')
         log_prob_scored = log_prob * score_clipped
         # print(f'--- train_step_actor: scored log_prob_scored {log_prob_scored.shape}')
-        actor_loss = log_prob_scored.mean()
+        actor_loss = -log_prob_scored.mean()
         # print(f'--- train_step_actor: actor_loss {actor_loss.shape}')
 
         self._actor_opt.zero_grad()
@@ -59,7 +58,10 @@ class AWACOptimizer:
         return {
             'actor_loss': actor_loss.item(),
             'actor_adv': adv.mean().item(),
-            'actor_score': score.mean().item(),
+            'actor_adv_clipped': adv_clipped.mean().item(),
+            # 'actor_score': score.mean().item(),
             'actor_score_clipped': score_clipped.mean().item(),
             'actor_log_prob': log_prob.mean().item(),
+            'action_mu': info['mu'].mean().item(),
+            'action_logstd': info['logstd'].mean().item(),
         }

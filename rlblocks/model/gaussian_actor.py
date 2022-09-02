@@ -1,4 +1,4 @@
-from typing import Callable, Any, Optional, Tuple
+from typing import Callable, Any, Optional, Tuple, Union, Dict
 
 import torch as t
 from torch import nn
@@ -13,8 +13,8 @@ def get_mu_logstd(params: t.Tensor, logstd_range: Optional[float] = None):
     mu = params[..., :mu_size]
     logstd = params[..., mu_size:]
     if logstd_range:
-        scale = (logstd_range[0] + logstd_range[1]) / 2
-        logstd = scale * t.tanh(logstd) + scale - logstd_range[0]
+        scale = (logstd_range[1] - logstd_range[0]) / 2
+        logstd = scale * t.tanh(logstd) + scale + logstd_range[0]
     return mu, logstd
 
 
@@ -32,7 +32,7 @@ class GaussianActor(ModelWrapper, StochasticActor):
         self._action_max = action_max
         self._logstd_range = logstd_range
 
-    def __call__(self, state: t.Tensor, deterministic: bool = False) -> t.Tensor:
+    def __call__(self, state: t.Tensor, deterministic: bool = False, add_info=False) -> Union[t.Tensor, Tuple[t.Tensor, Dict[str, Any]]]:
         params = self._model(state)
         mu, logstd = get_mu_logstd(params, self._logstd_range)
         if deterministic:
@@ -40,7 +40,10 @@ class GaussianActor(ModelWrapper, StochasticActor):
         else:
             dist = Normal(mu, t.exp(logstd))
             action = dist.rsample()
-        return action.clamp(self._action_min, self._action_max)
+        if add_info:
+            return action.clamp(self._action_min, self._action_max), {'mu': mu, 'logstd': logstd}
+        else:
+            return action.clamp(self._action_min, self._action_max)
 
     def log_prob(self, state: t.Tensor, action: t.Tensor) -> t.Tensor:
         params = self._model(state)
