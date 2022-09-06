@@ -16,4 +16,4 @@ class DeterministicActorWrapper:
         self._actor = actor
 
     def __call__(self, state: t.Tensor) -> t.Tensor:
-        return self._actor(state, deterministic=False)
+        return self._actor(state, deterministic=True)

@@ -35,8 +35,9 @@ class AWACOptimizer:
             action_q_actor = self._q_func(batch.state, action_policy)
             adv = action_q_batch - action_q_actor
             adv_clipped = adv.clamp(min=0)
-            adv = adv.clamp(max=5)
-            score = t.exp(adv / self._alambda)
+            # adv = adv.clamp(max=5)
+            # score = t.exp(adv / self._alambda)
+            score = adv / self._alambda
             score_clipped = t.where(adv > 0, score, 0.)
 
         # print(f'--- train_step_actor: action_q_batch {action_q_batch.shape}')
@@ -63,5 +64,6 @@ class AWACOptimizer:
             'actor_score_clipped': score_clipped.mean().item(),
             'actor_log_prob': log_prob.mean().item(),
             'action_mu': info['mu'].mean().item(),
-            'action_logstd': info['logstd'].mean().item(),
+            # 'action_logstd': info['logstd'].mean().item(),
+            'action_std': info['std'].mean().item(),
         }

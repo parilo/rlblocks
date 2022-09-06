@@ -8,14 +8,14 @@ from rlblocks.model.model_wrapper import ModelWrapper
 from rlblocks.model.stochastic_actor import StochasticActor
 
 
-def get_mu_logstd(params: t.Tensor, logstd_range: Optional[float] = None):
+def _get_mu_logstd(params: t.Tensor, logstd_range: Optional[float] = None):
     mu_size = params.shape[-1] // 2
     mu = params[..., :mu_size]
     logstd = params[..., mu_size:]
     if logstd_range:
         scale = (logstd_range[1] - logstd_range[0]) / 2
         logstd = scale * t.tanh(logstd) + scale + logstd_range[0]
-    return mu, logstd
+    return mu, t.exp(logstd)
 
 
 class GaussianActor(ModelWrapper, StochasticActor):
@@ -34,19 +34,20 @@ class GaussianActor(ModelWrapper, StochasticActor):
 
     def __call__(self, state: t.Tensor, deterministic: bool = False, add_info=False) -> Union[t.Tensor, Tuple[t.Tensor, Dict[str, Any]]]:
         params = self._model(state)
-        mu, logstd = get_mu_logstd(params, self._logstd_range)
+        mu, std = _get_mu_logstd(params, self._logstd_range)
         if deterministic:
             action = mu
         else:
-            dist = Normal(mu, t.exp(logstd))
+            dist = Normal(mu, std)
             action = dist.rsample()
+
         if add_info:
-            return action.clamp(self._action_min, self._action_max), {'mu': mu, 'logstd': logstd}
+            return action.clamp(self._action_min, self._action_max), {'mu': mu, 'std': std}
         else:
             return action.clamp(self._action_min, self._action_max)
 
     def log_prob(self, state: t.Tensor, action: t.Tensor) -> t.Tensor:
         params = self._model(state)
-        mu, logstd = get_mu_logstd(params, self._logstd_range)
-        dist = Normal(mu, t.exp(logstd))
+        mu, std = _get_mu_logstd(params, self._logstd_range)
+        dist = Normal(mu, std)
         return dist.log_prob(action)

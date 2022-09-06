@@ -1,5 +1,6 @@
 import argparse
 import os
+import pickle
 import random
 from copy import deepcopy
 from distutils.util import strtobool
@@ -75,6 +76,18 @@ def parse_args():
         help='Probability of using exploration during episode collection',
     )
     parser.add_argument(
+        '--replay-buffer-pre-fill', '--rbpf',
+        default=0,
+        type=int,
+        help='Pre fill replay buffer with random actions. Number of episodes.'
+    )
+    parser.add_argument(
+        '--lambdaa',
+        default=1,
+        type=float,
+        help='AWAC advantage scale (lambda parameter).',
+    )
+    parser.add_argument(
         '--device', '-d',
         default='cpu',
         help='PyTorch device'
@@ -98,10 +111,16 @@ def parse_args():
         help='Sparse episode visualization'
     )
     parser.add_argument(
-        '--replay-buffer-pre-fill', '--rbpf',
-        default=0,
+        '--save-dir', '--sd',
+        default=None,
+        type=str,
+        help='Model save dir'
+    )
+    parser.add_argument(
+        '--save-each', '--se',
+        default=5000,
         type=int,
-        help='Pre fill replay buffer with random actions. Number of episodes.'
+        help='Save model each iterations.'
     )
 
     return parser.parse_args()
@@ -151,8 +170,10 @@ def main():
         ).to(args.device),
         action_min=t.as_tensor(env.action_space.low).to(args.device),
         action_max=t.as_tensor(env.action_space.high).to(args.device),
-        logstd_range=(-2, 5),
+        logstd_range=(-3, 5),
     )
+
+    deterministic_actor = DeterministicActorWrapper(actor)
 
     critic = MinEnsamble([
         MLP(
@@ -173,17 +194,17 @@ def main():
     q_optimizer = QOptimizer(
         q_func=q_func,
         q_target_func=q_target_func,
-        actor=DeterministicActorWrapper(actor),
+        actor=deterministic_actor,
         lr=1e-4,
-        gamma=0.98,
+        gamma=0.996,
         update_target_each=1,
-        update_target_tau=0.005,
+        update_target_tau=0.004,
     )
 
     awac_optimizer = AWACOptimizer(
         actor=actor,
         q_func=q_func,
-        alambda=0.5,
+        alambda=args.lambdaa,
         lr=1e-4,
     )
 
@@ -192,7 +213,7 @@ def main():
         tb_logger_train = TensorboardLogger(os.path.join(args.tb_log_dir, 'train'))
 
     # exploration = CorrelatedExploration(action_len=action_len, std=0.2, beta=0.5)
-    exploration = NormalExploration(action_len=action_len, std=0.4)
+    exploration = NormalExploration(action_len=action_len, std=0.08)
     global_step_ind = 0
     global_ep_ind = 0
 
@@ -229,19 +250,24 @@ def main():
         replay_buffer.push_episode(episode)
         print_ep(episode, f'pre fill {pre_ep_ind}')
 
+    if args.save_dir:
+        os.makedirs(args.save_dir, exist_ok=True)
+
     for ep_ind in range(args.train_epochs):
 
         # perform rollout in the env
         for epoch_ep_ind in range(args.episodes_per_epoch):
 
-            exploration_enabled = exploration if random.uniform(0, 1) < args.exploration_prob else None
+            exploration_enabled = random.uniform(0, 1) < args.exploration_prob
+            used_actor = deterministic_actor  # if exploration_enabled else actor
+            used_exploration = exploration if exploration_enabled else None
             visualization_enabled = (global_ep_ind % args.visualize_every == 0) and args.visualize
 
             episode = collect_episode(
                 env=env,
-                actor=actor,
+                actor=used_actor,
                 ep_len=ep_len,
-                exploration=exploration_enabled,
+                exploration=used_exploration,
                 visualise=visualization_enabled,
                 state_preproc=state_preproc,
                 device=args.device,
@@ -256,8 +282,10 @@ def main():
             if tb_logger_train is not None:
                 ep_reward = t.sum(episode.rewards).item()
                 ep_reward = {'train': ep_reward} if exploration_enabled else {'valid': ep_reward}
+                env_ep_len = {'train': episode.size} if exploration_enabled else {'valid': episode.size}
                 tb_logger_train.log({
                     'env_ep_reward': ep_reward,
+                    'env_ep_len': env_ep_len,
                     'env_transitions': replay_buffer.transitions_pushed,
                     'env_eps': replay_buffer.eps_pushed,
                 }, global_step_ind)
@@ -270,8 +298,8 @@ def main():
         for batch_ind in range(num_train_ops):
 
             batch = replay_buffer.sample_batch(args.batch_size)
-            batch.state = state_preproc(batch.state)#, args.device)
-            batch.next_state = state_preproc(batch.next_state)#, args.device)
+            batch.state = state_preproc(batch.state)
+            batch.next_state = state_preproc(batch.next_state)
             batch = batch_to_device(batch, args.device)
 
             log_data = {}
@@ -283,6 +311,14 @@ def main():
 
             if tb_logger_train is not None:
                 tb_logger_train.log(log_data, global_step_ind)
+
+            if args.save_dir and global_step_ind % args.save_each == 0:
+                t.save(critic, os.path.join(args.save_dir, 'critic.pt'))
+                t.save(actor, os.path.join(args.save_dir, 'actor.pt'))
+                with open(os.path.join(args.save_dir, 'expinfo.pkl'), 'wb') as f:
+                    pickle.dump({
+                        'global_step_ind': global_step_ind,
+                    }, f)
 
             global_step_ind += 1
 
