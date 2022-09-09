@@ -1,4 +1,4 @@
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, List
 
 import numpy as np
 from gym.envs.mujoco import MujocoEnv
@@ -87,3 +87,34 @@ def collect_episode(
         size=len(actions_list),
         done=done,
     )
+
+
+def collect_episodes(
+        eps_num,
+        env,
+        actor,
+        ep_len,
+        exploration=None,
+        state_preproc: Optional[Callable[[Any, str], t.Tensor]] = None,
+        device='cpu',
+        action_min=-1,
+        action_max=1,
+        debug_print_prefix='',
+) -> List[Episode]:
+    eps = []
+    for pre_ep_ind in range(eps_num):
+        episode = collect_episode(
+            env=env,
+            actor=actor,
+            exploration=exploration,
+            ep_len=ep_len,
+            visualise=False,
+            state_preproc=state_preproc,
+            device=device,
+            action_min=action_min,
+            action_max=action_max,
+        )
+        eps.append(episode)
+        if debug_print_prefix:
+            print(f'{debug_print_prefix} {pre_ep_ind} {episode}')
+    return eps

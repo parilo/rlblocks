@@ -11,10 +11,11 @@ import torch as t
 import numpy as np
 
 from rlblocks.awac.awac_optimizer import AWACOptimizer
-from rlblocks.data.replay_buffer import ReplayBuffer, Episode, batch_to_device
+from rlblocks.data.replay_buffer import ReplayBuffer, Episode, batch_to_device, load_buffer_episodes_from_dir
 from rlblocks.data_collection.episode import collect_episode
 from rlblocks.data_collection.exploration import NormalExploration
 from rlblocks.model.actor import Actor
+from rlblocks.model.fixed_normalizer import FixedNormalizer
 from rlblocks.model.gaussian_actor import GaussianActor
 from rlblocks.model.min_ensamble import MinEnsamble
 from rlblocks.model.mlp import MLP
@@ -76,10 +77,22 @@ def parse_args():
         help='Probability of using exploration during episode collection',
     )
     parser.add_argument(
+        '--exploration-std', '--explstd',
+        default=0.2,
+        type=float,
+        help='Std of the normal noise used as exploration.',
+    )
+    parser.add_argument(
         '--replay-buffer-pre-fill', '--rbpf',
         default=0,
         type=int,
         help='Pre fill replay buffer with random actions. Number of episodes.'
+    )
+    parser.add_argument(
+        '--reward-scale',
+        default=1,
+        type=float,
+        help='Reward scale.',
     )
     parser.add_argument(
         '--lambdaa',
@@ -120,7 +133,31 @@ def parse_args():
         '--save-each', '--se',
         default=5000,
         type=int,
-        help='Save model each iterations.'
+        help='Save model each iterations'
+    )
+    parser.add_argument(
+        '--save-episodes-dir', '--sed',
+        default=None,
+        type=str,
+        help='Save collected episodes in folder'
+    )
+    parser.add_argument(
+        '--load-dir', '--ld',
+        default=None,
+        type=str,
+        help='Load models from dir'
+    )
+    parser.add_argument(
+        '--load-episodes', '--le',
+        default=None,
+        type=str,
+        help='Load episodes from dir'
+    )
+    parser.add_argument(
+        '--load-state-norm', '--lsn',
+        default=None,
+        type=str,
+        help='Load state normalizer parameters from file'
     )
 
     return parser.parse_args()
@@ -148,8 +185,12 @@ def main():
         ep_num=ep_num,
         ep_len=ep_len,
         state_shapes=state_shapes,
-        action_len=action_len
+        action_len=action_len,
+        save_dir=os.path.join(args.save_episodes_dir, 'replay_buffer') if args.save_episodes_dir else None,
     )
+
+    if args.load_episodes:
+        load_buffer_episodes_from_dir(replay_buffer, args.load_episodes)
 
     modalities = ['obs']
 
@@ -160,36 +201,62 @@ def main():
         ], dim=-1)
         return cated_state
 
+    global_step_ind = 0
+    global_ep_ind = 0
+
     # init models
-    actor = GaussianActor(
-        model=MLP(
-            input_size=state_len,
-            output_size=2 * action_len,
-            layers_num=3,
-            layer_size=256
-        ).to(args.device),
-        action_min=t.as_tensor(env.action_space.low).to(args.device),
-        action_max=t.as_tensor(env.action_space.high).to(args.device),
-        logstd_range=(-3, 5),
-    )
+    if args.load_dir:
+        actor = t.load(os.path.join(args.load_dir, 'actor.pt'), map_location=args.device)
+        q_func = t.load(os.path.join(args.load_dir, 'q_func.pt'), map_location=args.device)
+        q_target_func = t.load(os.path.join(args.load_dir, 'q_target_func.pt'), map_location=args.device)
+        expinfo_path = os.path.join(args.load_dir, 'expinfo.pkl')
+        if os.path.exists(expinfo_path):
+            with open(expinfo_path, 'rb') as f:
+                expinfo = pickle.load(f)
+                global_step_ind = expinfo['global_step_ind']
+    else:
+
+        actor = GaussianActor(
+            model=MLP(
+                input_size=state_len,
+                output_size=2 * action_len,
+                layers_num=3,
+                layer_size=256
+            ).to(args.device),
+            action_min=t.as_tensor(env.action_space.low).to(args.device),
+            action_max=t.as_tensor(env.action_space.high).to(args.device),
+            logstd_range=(-3, 5),
+        )
+
+        critic = MinEnsamble([
+            MLP(
+                input_size=state_len + action_len,
+                output_size=1,
+                layers_num=3,
+                layer_size=256
+            ).to(args.device)
+            for _ in range(2)
+        ])
+
+        q_func = QFunc(critic)
+
+        q_target_func = QFunc(
+            deepcopy(q_func.model).to(args.device)
+        )
+
+    if args.load_state_norm:
+        print(f'Using state normalization from {args.load_state_norm}')
+        with open(args.load_state_norm, 'rb') as f:
+            norm_data = pickle.load(f)
+            normalizer = FixedNormalizer(
+                t.as_tensor(norm_data['state_mean']).to(args.device),
+                t.as_tensor(norm_data['state_std']).to(args.device),
+            )
+            actor.state_norm = normalizer
+            q_func.state_norm = normalizer
+            q_target_func.state_norm = normalizer
 
     deterministic_actor = DeterministicActorWrapper(actor)
-
-    critic = MinEnsamble([
-        MLP(
-            input_size=state_len + action_len,
-            output_size=1,
-            layers_num=3,
-            layer_size=256
-        ).to(args.device)
-        for _ in range(2)
-    ])
-
-    q_func = QFunc(critic)
-
-    q_target_func = QFunc(
-        deepcopy(q_func.model).to(args.device)
-    )
 
     q_optimizer = QOptimizer(
         q_func=q_func,
@@ -213,31 +280,23 @@ def main():
         tb_logger_train = TensorboardLogger(os.path.join(args.tb_log_dir, 'train'))
 
     # exploration = CorrelatedExploration(action_len=action_len, std=0.2, beta=0.5)
-    exploration = NormalExploration(action_len=action_len, std=0.08)
-    global_step_ind = 0
-    global_ep_ind = 0
+    exploration = NormalExploration(action_len=action_len, std=args.exploration_std)
 
     def episode_postproc(ep: Episode):
-        # ep.rewards /= 10
+        ep.rewards *= args.reward_scale
         return ep
 
     def random_actor(inp: t.Tensor):
         return t.as_tensor([env.action_space.sample()])
 
-    def print_ep(episode: Episode, ep_ind):
-        ep_reward = t.sum(episode.rewards).item()
-        print(
-            f'--- ep {ep_ind} '
-            f'episode size {episode.size} '
-            f'reward {ep_reward} '
-            f'action min {episode.actions.min()} '
-            f'max {episode.actions.max()}')
-
     # pre fill replay buffer
+    eps = []
     for pre_ep_ind in range(args.replay_buffer_pre_fill):
+        actor.model.eval()
         episode = collect_episode(
             env=env,
-            actor=random_actor,
+            actor=deterministic_actor if args.load_dir else random_actor,
+            exploration=exploration if args.load_dir else None,
             ep_len=ep_len,
             visualise=False,
             state_preproc=state_preproc,
@@ -246,9 +305,11 @@ def main():
             action_max=env.action_space.high,
             # frame_skip=2,
         )
+        actor.model.train()
         episode = episode_postproc(episode)
+        eps.append(episode)
         replay_buffer.push_episode(episode)
-        print_ep(episode, f'pre fill {pre_ep_ind}')
+        print(f'pre fill {pre_ep_ind} {episode}')
 
     if args.save_dir:
         os.makedirs(args.save_dir, exist_ok=True)
@@ -263,6 +324,7 @@ def main():
             used_exploration = exploration if exploration_enabled else None
             visualization_enabled = (global_ep_ind % args.visualize_every == 0) and args.visualize
 
+            actor.model.eval()
             episode = collect_episode(
                 env=env,
                 actor=used_actor,
@@ -275,8 +337,9 @@ def main():
                 action_max=env.action_space.high,
                 # frame_skip=2,
             )
+            actor.model.train()
             episode = episode_postproc(episode)
-            print_ep(episode, ep_ind)
+            print(f'{ep_ind}, {episode}')
             replay_buffer.push_episode(episode)
 
             if tb_logger_train is not None:
@@ -313,8 +376,9 @@ def main():
                 tb_logger_train.log(log_data, global_step_ind)
 
             if args.save_dir and global_step_ind % args.save_each == 0:
-                t.save(critic, os.path.join(args.save_dir, 'critic.pt'))
                 t.save(actor, os.path.join(args.save_dir, 'actor.pt'))
+                t.save(q_func, os.path.join(args.save_dir, 'q_func.pt'))
+                t.save(q_target_func, os.path.join(args.save_dir, 'q_target_func.pt'))
                 with open(os.path.join(args.save_dir, 'expinfo.pkl'), 'wb') as f:
                     pickle.dump({
                         'global_step_ind': global_step_ind,

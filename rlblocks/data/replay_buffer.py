@@ -1,3 +1,4 @@
+import glob
 import os
 import pickle
 from dataclasses import dataclass
@@ -14,6 +15,13 @@ class Episode:
     rewards: t.Tensor
     size: int
     done: bool
+
+    def __repr__(self):
+        ep_reward = t.sum(self.rewards).item()
+        return f'episode size {self.size} ' \
+            f'reward {ep_reward} ' \
+            f'action min {self.actions.min()} ' \
+            f'max {self.actions.max()}'
 
 
 @dataclass
@@ -148,9 +156,17 @@ class ReplayBuffer:
         )
 
 
-def save_buffer_episodes_to_dir(buf: ReplayBuffer, dir_path:str):
+def save_buffer_episodes_to_dir(buf: ReplayBuffer, dir_path: str):
     os.makedirs(dir_path, exist_ok=True)
     for ep_ind in range(buf.eps_pushed):
         ep = buf.get_episode(ep_ind)
         with open(os.path.join(dir_path, f'ep_{ep_ind}.pkl'), 'wb') as f:
             pickle.dump(ep, f)
+
+
+def load_buffer_episodes_from_dir(buf: ReplayBuffer, dir_path: str):
+    for ind, path in enumerate(glob.glob(os.path.join(dir_path, 'replay_buffer', '*.pkl'))):
+        if ind % 100 == 0:
+            print(f'loading {ind}')
+        with open(path, 'rb') as f:
+            buf.push_episode(pickle.load(f))

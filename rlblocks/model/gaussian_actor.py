@@ -4,6 +4,7 @@ import torch as t
 from torch import nn
 from torch.distributions.normal import Normal
 
+from rlblocks.model.fixed_normalizer import FixedNormalizer
 from rlblocks.model.model_wrapper import ModelWrapper
 from rlblocks.model.stochastic_actor import StochasticActor
 
@@ -26,13 +27,16 @@ class GaussianActor(ModelWrapper, StochasticActor):
             action_min: float,
             action_max: float,
             logstd_range: Optional[Tuple[float, float]] = None,
+            state_norm: Optional[FixedNormalizer] = None,
     ):
         self._model = model
         self._action_min = action_min
         self._action_max = action_max
         self._logstd_range = logstd_range
+        self.state_norm = state_norm
 
     def __call__(self, state: t.Tensor, deterministic: bool = False, add_info=False) -> Union[t.Tensor, Tuple[t.Tensor, Dict[str, Any]]]:
+        state = self.state_norm.norm(state)
         params = self._model(state)
         mu, std = _get_mu_logstd(params, self._logstd_range)
         if deterministic:
@@ -47,6 +51,7 @@ class GaussianActor(ModelWrapper, StochasticActor):
             return action.clamp(self._action_min, self._action_max)
 
     def log_prob(self, state: t.Tensor, action: t.Tensor) -> t.Tensor:
+        state = self.state_norm.norm(state)
         params = self._model(state)
         mu, std = _get_mu_logstd(params, self._logstd_range)
         dist = Normal(mu, std)
