@@ -19,12 +19,12 @@ def collect_episode(
         action_max: float = 1,
         frame_skip: int = 1,
         device: str = 'cpu',
-        set_env_start_state: Optional[Callable[[MujocoEnv], None]] = None,
+        # set_env_start_state: Optional[Callable[[MujocoEnv], None]] = None,
 ) -> Episode:
 
     obs = env.reset()
-    if set_env_start_state is not None:
-        set_env_start_state(env)
+    # if set_env_start_state is not None:
+    #     set_env_start_state(env)
     obs_list = [obs]
     actions_list = []
     reward_list = []

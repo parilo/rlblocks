@@ -2,6 +2,7 @@ import glob
 import os
 import pickle
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Dict, Union
 
 import numpy as np
@@ -91,6 +92,9 @@ class ReplayBuffer:
     def eps_pushed(self) -> int:
         return self._ep_pushed
 
+    def append_episode(self, episode: Episode):
+        pass
+
     def push_episode(self, episode: Episode):
         for mod_name, mod_value in episode.states.items():
             self._states[mod_name][self._ep_ind, :episode.size + 1] = mod_value
@@ -165,8 +169,12 @@ def save_buffer_episodes_to_dir(buf: ReplayBuffer, dir_path: str):
 
 
 def load_buffer_episodes_from_dir(buf: ReplayBuffer, dir_path: str):
-    for ind, path in enumerate(glob.glob(os.path.join(dir_path, 'replay_buffer', '*.pkl'))):
+    # for ind, path in enumerate(glob.glob(os.path.join(dir_path, '**', 'ep_*.pkl'))):
+    for ind, path in enumerate(Path(dir_path).rglob("ep_*.pkl")):
         if ind % 100 == 0:
             print(f'loading {ind}')
         with open(path, 'rb') as f:
-            buf.push_episode(pickle.load(f))
+            try:
+                buf.push_episode(pickle.load(f))
+            except pickle.UnpicklingError:
+                print(f'--- UnpicklingError: skipping {path}')

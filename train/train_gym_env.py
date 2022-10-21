@@ -13,7 +13,8 @@ import numpy as np
 from rlblocks.awac.awac_optimizer import AWACOptimizer
 from rlblocks.data.replay_buffer import ReplayBuffer, Episode, batch_to_device, load_buffer_episodes_from_dir
 from rlblocks.data_collection.episode import collect_episode
-from rlblocks.data_collection.exploration import NormalExploration
+from rlblocks.data_collection.exploration import NormalExploration, NormalRandomizedExploration, CorrelatedExploration, \
+    NormalStepBasedExploration
 from rlblocks.model.actor import Actor
 from rlblocks.model.fixed_normalizer import FixedNormalizer
 from rlblocks.model.gaussian_actor import GaussianActor
@@ -89,16 +90,52 @@ def parse_args():
         help='Pre fill replay buffer with random actions. Number of episodes.'
     )
     parser.add_argument(
+        '--frame-skip', '--fs',
+        default=1,
+        type=int,
+        help='Frame skip',
+    )
+    parser.add_argument(
+        '--gamma', '-g',
+        default=0.996,
+        type=float,
+        help='Discount factor',
+    )
+    parser.add_argument(
+        '--update-target-each',
+        default=1,
+        type=int,
+        help='Update target network every n step',
+    )
+    parser.add_argument(
+        '--update-target-rate',
+        default=0.001,
+        type=float,
+        help='Update target rate, tau',
+    )
+    parser.add_argument(
         '--reward-scale',
         default=1,
         type=float,
-        help='Reward scale.',
+        help='Reward scale',
+    )
+    parser.add_argument(
+        '--reward-shift',
+        default=0,
+        type=float,
+        help='Reward shift',
     )
     parser.add_argument(
         '--lambdaa',
         default=1,
         type=float,
         help='AWAC advantage scale (lambda parameter).',
+    )
+    parser.add_argument(
+        '--critic-heat-up',
+        default=0,
+        type=int,
+        help='',
     )
     parser.add_argument(
         '--device', '-d',
@@ -169,7 +206,7 @@ def main():
     ep_num = args.replay_buffer_ep_num
 
     # init env
-    env = VecToDictObsWrapper(gym.make(args.env_name))
+    env = VecToDictObsWrapper(gym.make(args.env_name, healthy_reward=0.0))  #, healthy_z_range=(0.8, 3.0), ctrl_cost_weight=0.0
     print(f'env {env}')
     print(f'observation space {env.observation_space}')
     print(f'action space {env.action_space}')
@@ -221,11 +258,11 @@ def main():
                 input_size=state_len,
                 output_size=2 * action_len,
                 layers_num=3,
-                layer_size=256
+                layer_size=64,  #256,
             ).to(args.device),
             action_min=t.as_tensor(env.action_space.low).to(args.device),
             action_max=t.as_tensor(env.action_space.high).to(args.device),
-            logstd_range=(-3, 5),
+            logstd_range=(-5, 5),
         )
 
         critic = MinEnsamble([
@@ -233,7 +270,7 @@ def main():
                 input_size=state_len + action_len,
                 output_size=1,
                 layers_num=3,
-                layer_size=256
+                layer_size=64,  #256,
             ).to(args.device)
             for _ in range(2)
         ])
@@ -258,14 +295,40 @@ def main():
 
     deterministic_actor = DeterministicActorWrapper(actor)
 
+    randomized_leg = 0
+    def env_actor(state: t.Tensor, step_ind: int):
+
+        # if step_ind < 5:
+        #     action = t.zeros((1, action_len))
+        #
+        #     # left leg
+        #     if randomized_leg == 0:
+        #         action[0, 5] = 0.3
+        #         action[0, 6] = 0.0
+        #         action[0, 9] = -0.3
+        #         action[0, 10] = -0.05
+        #
+        #     # right leg
+        #     elif randomized_leg == 1:
+        #         action[0, 5] = -0.3
+        #         action[0, 6] = -0.05
+        #         action[0, 9] = 0.3
+        #         action[0, 10] = 0.0
+        #
+        #     return action
+        # else:
+        return deterministic_actor(state)
+
+
     q_optimizer = QOptimizer(
         q_func=q_func,
         q_target_func=q_target_func,
-        actor=deterministic_actor,
+        # actor=deterministic_actor,
+        actor=actor,
         lr=1e-4,
-        gamma=0.996,
-        update_target_each=1,
-        update_target_tau=0.004,
+        gamma=args.gamma,
+        update_target_each=args.update_target_each,
+        update_target_tau=args.update_target_rate,
     )
 
     awac_optimizer = AWACOptimizer(
@@ -279,31 +342,35 @@ def main():
     if args.tb_log_dir is not None:
         tb_logger_train = TensorboardLogger(os.path.join(args.tb_log_dir, 'train'))
 
-    # exploration = CorrelatedExploration(action_len=action_len, std=0.2, beta=0.5)
+    # exploration = CorrelatedExploration(action_len=action_len, std=0.2, beta=0.1)
     exploration = NormalExploration(action_len=action_len, std=args.exploration_std)
+    # exploration = NormalRandomizedExploration(action_len=action_len, min_std=0, max_std=0.3)
+    # exploration = NormalStepBasedExploration(action_len=action_len, std=args.exploration_std, switch_steps=50)
 
     def episode_postproc(ep: Episode):
+        ep.rewards += args.reward_shift
         ep.rewards *= args.reward_scale
         return ep
 
-    def random_actor(inp: t.Tensor):
-        return t.as_tensor([env.action_space.sample()])
+    # def random_actor(inp: t.Tensor):
+    #     return t.as_tensor([env.action_space.sample()])
 
     # pre fill replay buffer
     eps = []
     for pre_ep_ind in range(args.replay_buffer_pre_fill):
+        randomized_leg = random.randint(0, 2)
         actor.model.eval()
         episode = collect_episode(
             env=env,
-            actor=deterministic_actor if args.load_dir else random_actor,
-            exploration=exploration if args.load_dir else None,
+            actor=env_actor,  #deterministic_actor,  #if args.load_dir else random_actor,
+            exploration=exploration,  #if args.load_dir else None,
             ep_len=ep_len,
             visualise=False,
             state_preproc=state_preproc,
             device=args.device,
             action_min=env.action_space.low,
             action_max=env.action_space.high,
-            # frame_skip=2,
+            frame_skip=args.frame_skip,
         )
         actor.model.train()
         episode = episode_postproc(episode)
@@ -316,47 +383,48 @@ def main():
 
     for ep_ind in range(args.train_epochs):
 
-        # perform rollout in the env
-        for epoch_ep_ind in range(args.episodes_per_epoch):
+        if global_step_ind >= args.critic_heat_up:
+            # perform rollout in the env
+            for epoch_ep_ind in range(args.episodes_per_epoch):
 
-            exploration_enabled = random.uniform(0, 1) < args.exploration_prob
-            used_actor = deterministic_actor  # if exploration_enabled else actor
-            used_exploration = exploration if exploration_enabled else None
-            visualization_enabled = (global_ep_ind % args.visualize_every == 0) and args.visualize
+                exploration_enabled = random.uniform(0, 1) < args.exploration_prob
+                used_actor = env_actor # deterministic_actor  # if exploration_enabled else actor
+                used_exploration = exploration if exploration_enabled else None
+                visualization_enabled = (ep_ind % args.visualize_every == 0) and args.visualize
 
-            actor.model.eval()
-            episode = collect_episode(
-                env=env,
-                actor=used_actor,
-                ep_len=ep_len,
-                exploration=used_exploration,
-                visualise=visualization_enabled,
-                state_preproc=state_preproc,
-                device=args.device,
-                action_min=env.action_space.low,
-                action_max=env.action_space.high,
-                # frame_skip=2,
-            )
-            actor.model.train()
-            episode = episode_postproc(episode)
-            print(f'{ep_ind}, {episode}')
-            replay_buffer.push_episode(episode)
+                randomized_leg = random.randint(0, 2)
+                actor.model.eval()
+                episode = collect_episode(
+                    env=env,
+                    actor=used_actor,
+                    ep_len=ep_len,
+                    exploration=used_exploration,
+                    visualise=visualization_enabled,
+                    state_preproc=state_preproc,
+                    device=args.device,
+                    action_min=env.action_space.low,
+                    action_max=env.action_space.high,
+                    frame_skip=args.frame_skip,
+                )
+                actor.model.train()
+                episode = episode_postproc(episode)
+                print(f'{global_step_ind} {ep_ind}, {episode}')
+                replay_buffer.push_episode(episode)
 
-            if tb_logger_train is not None:
-                ep_reward = t.sum(episode.rewards).item()
-                ep_reward = {'train': ep_reward} if exploration_enabled else {'valid': ep_reward}
-                env_ep_len = {'train': episode.size} if exploration_enabled else {'valid': episode.size}
-                tb_logger_train.log({
-                    'env_ep_reward': ep_reward,
-                    'env_ep_len': env_ep_len,
-                    'env_transitions': replay_buffer.transitions_pushed,
-                    'env_eps': replay_buffer.eps_pushed,
-                }, global_step_ind)
+                if tb_logger_train is not None:
+                    ep_reward = t.sum(episode.rewards).item()
+                    ep_reward = {'train': ep_reward} if exploration_enabled else {'valid': ep_reward}
+                    env_ep_len = {'train': episode.size} if exploration_enabled else {'valid': episode.size}
+                    tb_logger_train.log({
+                        'env_ep_reward': ep_reward,
+                        'env_ep_len': env_ep_len,
+                        'env_transitions': replay_buffer.transitions_pushed,
+                        'env_eps': replay_buffer.eps_pushed,
+                    }, global_step_ind)
 
-            global_ep_ind += 1
-
-        max_batch_num = int(replay_buffer.transitions_pushed / args.batch_size / 2)
-        num_train_ops = min(args.train_steps_per_epoch, max_batch_num)
+        # max_batch_num = int(replay_buffer.transitions_pushed / args.batch_size / 2)
+        # num_train_ops = min(args.train_steps_per_epoch, max_batch_num)
+        num_train_ops = args.train_steps_per_epoch
 
         for batch_ind in range(num_train_ops):
 
@@ -367,7 +435,11 @@ def main():
 
             log_data = {}
             log_data.update(q_optimizer.train_step(batch))
-            log_data.update(awac_optimizer.train_step(batch))
+            if global_step_ind >= args.critic_heat_up:
+                log_data.update(awac_optimizer.train_step(batch))
+            else:
+                if global_step_ind % 100 == 0:
+                    print(f'--- step {global_step_ind} ep {ep_ind}')
 
             # if batch_ind == 0:
             #     print(f'--- ep {ep_ind} batch {batch_ind} {log_data}')

@@ -56,14 +56,17 @@ class AWACOptimizer:
         actor_loss.backward()
         self._actor_opt.step()
 
-        return {
+        train_info = {
             'actor_loss': actor_loss.item(),
             'actor_adv': adv.mean().item(),
             'actor_adv_clipped': adv_clipped.mean().item(),
-            # 'actor_score': score.mean().item(),
+            'actor_score': score.mean().item(),
             'actor_score_clipped': score_clipped.mean().item(),
             'actor_log_prob': log_prob.mean().item(),
-            'action_mu': info['mu'].mean().item(),
-            # 'action_logstd': info['logstd'].mean().item(),
-            'action_std': info['std'].mean().item(),
+            # 'action_mu': info['mu'].mean().item(),
+            # 'action_std': info['std'].mean().item(),
         }
+        for name, val in info.items():
+            train_info[f'action_{name}'] = val.mean().item()
+
+        return train_info

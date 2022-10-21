@@ -1,3 +1,4 @@
+import torch as t
 from torch import nn
 
 
@@ -20,7 +21,11 @@ class MLP(nn.Module):
                 nn.Linear(self._layer_size, self._layer_size),
                 nn.ReLU()
             ])
-        layers.append(nn.Linear(self._layer_size, self._output_size))
+        ll = nn.Linear(self._layer_size, self._output_size)
+        with t.no_grad():
+            ll.weight *= 0.01
+            ll.bias *= 0.01
+        layers.append(ll)
 
         self.add_module('_model', nn.Sequential(*layers))
 
