@@ -41,7 +41,7 @@ class QOptimizer:
         self._update_target_each = update_target_each
         self._update_target_tau = update_target_tau
 
-        self._q_opt = optim.Adam(self._q_func.model.parameters(), lr=lr)
+        self._q_opt = optim.Adam(self._q_func.model.parameters(), lr=lr)  #, betas=(0.9, 0.9))
         self._step_ind = 0
 
     def _update_target(self):

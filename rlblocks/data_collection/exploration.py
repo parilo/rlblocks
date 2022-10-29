@@ -83,3 +83,39 @@ class CorrelatedExploration:
 
     def reset(self):
         self._prev_noise = None
+
+
+class RandomActionExploration:
+
+    def __init__(self, action_len, action_min, action_max, gap_steps, action_steps):
+        self._action_len = action_len
+        self._action_min = action_min
+        self._action_max = action_max
+        self._gap_steps = gap_steps
+        self._action_steps = action_steps
+        self._total_steps = gap_steps + action_steps
+        self._step_ind = 0
+        self._sample_action()
+
+    def _sample_action(self):
+        self._action = np.random.uniform(self._action_min, self._action_max, size=self._action_len)
+
+    def _update(self):
+
+        self._step_ind += 1
+
+        if self._step_ind > self._total_steps:
+            self._step_ind = 0
+            self._sample_action()
+
+    def __call__(self, x):
+        self._update()
+        if self._step_ind > self._gap_steps:
+            # print(f'--- step {self._step_ind} / {self._gap_steps} {self._action}')
+            return self._action
+        else:
+            # print(f'--- step {self._step_ind} / {self._gap_steps}')
+            return x
+
+    def reset(self):
+        pass

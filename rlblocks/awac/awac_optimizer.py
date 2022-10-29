@@ -20,7 +20,7 @@ class AWACOptimizer:
             lr: float
     ):
         self._actor = actor
-        self._actor_opt = optim.Adam(self._actor.model.parameters(), lr=lr)
+        self._actor_opt = optim.Adam(self._actor.model.parameters(), lr=lr)#, betas=(0.9, 0.9))
         self._q_func = q_func
         self._alambda = alambda
 
@@ -30,7 +30,9 @@ class AWACOptimizer:
         # print(f'--- train_step_actor: actor action {action.shape}')
 
         with t.no_grad():
-            action_q_batch = self._q_func(batch.state, batch.action)
+            considered_action = batch.action  # + t.randn_like(batch.action) * 0.1
+            considered_action = considered_action.clamp(-0.4, 0.4)
+            action_q_batch = self._q_func(batch.state, considered_action)
             action_policy, info = self._actor(batch.state, add_info=True)
             action_q_actor = self._q_func(batch.state, action_policy)
             adv = action_q_batch - action_q_actor
@@ -45,7 +47,7 @@ class AWACOptimizer:
         # print(f'--- train_step_actor: adv {adv.shape}')
         # print(f'--- train_step_actor: score {score.shape}')
 
-        log_prob = self._actor.log_prob(batch.state, batch.action)
+        log_prob = self._actor.log_prob(batch.state, considered_action)
         # print(f'--- train_step_actor: log_prob {log_prob.shape}')
         log_prob_scored = log_prob * score_clipped
         # print(f'--- train_step_actor: scored log_prob_scored {log_prob_scored.shape}')

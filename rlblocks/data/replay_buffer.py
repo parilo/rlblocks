@@ -1,6 +1,7 @@
 import glob
 import os
 import pickle
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Union
@@ -17,12 +18,30 @@ class Episode:
     size: int
     done: bool
 
+    def copy(self):
+        if isinstance(self.states, t.Tensor):
+            states = self.states.clone()
+        else:
+            states = {mod: val.clone() for mod, val in self.states.items()}
+        return Episode(
+            states=states,
+            actions=self.actions.clone(),
+            rewards=self.rewards.clone(),
+            size=self.size,
+            done=self.done,
+        )
+
     def __repr__(self):
         ep_reward = t.sum(self.rewards).item()
+        state_shapes = {mod: val.shape for mod, val in self.states.items()}
         return f'episode size {self.size} ' \
             f'reward {ep_reward} ' \
             f'action min {self.actions.min()} ' \
-            f'max {self.actions.max()}'
+            f'max {self.actions.max()} ' \
+            f'done {self.done}'
+            # f'shapes {state_shapes} ' \
+            # f'actions {self.actions.shape} ' \
+            # f'rewards {self.rewards.shape} ' \
 
 
 @dataclass
@@ -82,42 +101,58 @@ class ReplayBuffer:
         self._ep_ind = 0
         self._ep_stored = 0
         self._ep_pushed = 0
-        self._tr_stored = 0
+        self._tr_pushed = 0
 
     @property
     def transitions_pushed(self):
-        return self._tr_stored
+        return self._tr_pushed
 
     @property
     def eps_pushed(self) -> int:
         return self._ep_pushed
 
-    def append_episode(self, episode: Episode):
-        pass
-
-    def push_episode(self, episode: Episode):
+    def append_episode(self, episode: Episode, add_last_obs: bool = False):
+        start_ind = self._ep_sizes[self._ep_ind][0]
+        end_ind = start_ind + episode.size
+        obs_end_ind = end_ind + (1 if add_last_obs else 0)
         for mod_name, mod_value in episode.states.items():
-            self._states[mod_name][self._ep_ind, :episode.size + 1] = mod_value
-        self._actions[self._ep_ind, :episode.size] = episode.actions
-        self._rewards[self._ep_ind, :episode.size] = episode.rewards
-        self._ep_sizes[self._ep_ind][0] = episode.size
+            self._states[mod_name][self._ep_ind, start_ind:obs_end_ind] = mod_value if add_last_obs else mod_value[:-1]
+        self._actions[self._ep_ind, start_ind:end_ind] = episode.actions
+        self._rewards[self._ep_ind, start_ind:end_ind] = episode.rewards
+        self._ep_sizes[self._ep_ind][0] += episode.size
         self._ends_with_done[self._ep_ind][0] = episode.done
 
-        if self._save_dir:
-            self._save_episode(episode, self._ep_ind)
+    def end_episode(self):
 
-        self._ep_ind += 1
-        self._ep_ind %= self._ep_num
+        if self._save_dir:
+            ep = self.get_episode(self._ep_ind)
+            self._save_episode(ep.copy(), self._ep_ind)
+
+        self._tr_pushed += self._ep_sizes[self._ep_ind][0]
+        self._ep_pushed += 1
         self._ep_stored += 1
         self._ep_stored = min(self._ep_num, self._ep_stored)
-        self._tr_stored += episode.size
-        self._ep_pushed += 1
+        self._ep_ind += 1
+        self._ep_ind %= self._ep_num
+
+        self.clean_last_episode()
+
+    def clean_last_episode(self):
+        self._ep_sizes[self._ep_ind][0] = 0
+        self._ends_with_done[self._ep_ind][0] = 0
+
+    def push_episode(self, episode: Episode):
+        self.append_episode(episode, add_last_obs=True)
+        self.end_episode()
 
     def _save_episode(self, ep: Episode, ep_ind: int):
-        with open(os.path.join(self._save_dir, f'ep_{self._save_episode_suffix}_{ep_ind}.pkl'), 'wb') as f:
+        fpath = f'ep_{self._save_episode_suffix}_{ep_ind}.pkl'
+        with open(os.path.join(self._save_dir, fpath), 'wb') as f:
             pickle.dump(ep, f)
 
     def sample_batch(self, batch_size) -> Batch:
+        if self._ep_stored == 0:
+            raise RuntimeError(f'Stored episodes: {self._ep_stored} should be greater than zero')
         ep_inds = np.random.randint(0, self._ep_stored, size=batch_size)
         transition_inds = np.random.randint(0, self._ep_len, size=batch_size)
         ep_sizes = self._ep_sizes[ep_inds, 0]
@@ -151,13 +186,17 @@ class ReplayBuffer:
         return self.get_episode(ep_ind)
 
     def get_episode(self, ep_ind):
-        size = self._ep_sizes[ep_ind]
+        size = self._ep_sizes[ep_ind][0]
         return Episode(
-            states={mod: val[ep_ind, :size] for mod, val in self._states.items()},
+            states={mod: val[ep_ind, :size + 1] for mod, val in self._states.items()},
             actions=self._actions[ep_ind, :size],
             rewards=self._rewards[ep_ind, :size],
             size=size,
+            done=self._ends_with_done[ep_ind][0],
         )
+
+    def get_last_episode(self):
+        return self.get_episode((self._ep_ind - 1) % self._ep_num)
 
 
 def save_buffer_episodes_to_dir(buf: ReplayBuffer, dir_path: str):
